@@ -1,1 +1,22 @@
+# OS
 .DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# Roblox binaries
+*.rbxl
+*.rbxlx
+*.rbxm
+*.rbxmx
+
+# Build/output
+build/
+dist/
+out/
+tmp/
+
+# Logs
+*.log
