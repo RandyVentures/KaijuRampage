@@ -5,6 +5,7 @@
 
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 
 local abilityRemote = ReplicatedStorage:WaitForChild("Remotes"):WaitForChild("AbilityRequest")
 
@@ -17,6 +18,9 @@ local keyToAbility = {
 
 local function requestAbility(abilityName)
 	abilityRemote:FireServer(abilityName, os.clock())
+	if RunService:IsStudio() then
+		print(string.format("[AbilityRequest] %s fired", tostring(abilityName)))
+	end
 end
 
 UserInputService.InputBegan:Connect(function(input, gameProcessed)

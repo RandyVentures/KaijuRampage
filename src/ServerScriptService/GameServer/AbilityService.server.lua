@@ -22,6 +22,7 @@ local uiStateRemote = RemoteUtil.GetOrCreateRemote("Remotes", "UIState", "Remote
 
 local playerCooldowns = {}
 local lastPositions = {}
+local lastRequestTimes = {}
 
 local function getCooldownState(player)
 	playerCooldowns[player.UserId] = playerCooldowns[player.UserId] or CooldownUtil.New()
@@ -143,40 +144,60 @@ local function findNearestBuilding(origin, maxDistance)
 end
 
 local function sendCooldown(player, abilityName, cooldownSeconds)
+	local serverNow = os.clock()
 	uiStateRemote:FireClient(player, {
 		type = "Cooldown",
 		ability = abilityName,
 		duration = cooldownSeconds,
+		serverNow = serverNow,
+		readyAt = serverNow + cooldownSeconds,
 	})
 end
 
 local function handleAbility(player, abilityName)
 	local antiExploit = ServiceLocator.Get("AntiExploit")
 	if antiExploit and not antiExploit.IsCharacterValid(player) then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s invalid character"):format(abilityName))
+		end
 		return
 	end
 
 	local params = getAbilityParams(player, abilityName)
 	if not params then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s missing params"):format(abilityName))
+		end
 		return
 	end
 
 	local cooldownState = getCooldownState(player)
 	local canUse = CooldownUtil.CanUse(cooldownState, abilityName, params.cooldown)
 	if not canUse then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s cooldown active"):format(abilityName))
+		end
 		return
 	end
 
 	local root = getPlayerRoot(player)
 	if not root then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s missing root"):format(abilityName))
+		end
 		return
 	end
 
 	if antiExploit and not antiExploit.CheckRateLimit(player, "Ability_" .. abilityName, 4, 1) then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s rate limited"):format(abilityName))
+		end
 		return
 	end
 
 	CooldownUtil.MarkUsed(cooldownState, abilityName)
+	abilityConfirmedRemote:FireClient(player, abilityName)
+	sendCooldown(player, abilityName, params.cooldown)
 	local origin = root.Position
 
 	if abilityName == "Stomp" then
@@ -218,34 +239,45 @@ local function handleAbility(player, abilityName)
 			end
 		end
 	elseif abilityName == "Roar" then
-		local hitCount = applyDamageInRadius(player, origin, 35, 10)
-		applyRoarKnockback(origin, 35)
+		local hitCount = applyDamageInRadius(player, origin, 55, 10)
+		applyRoarKnockback(origin, 55)
 		if RunService:IsStudio() then
 			print(("Roar hits: %d"):format(hitCount))
 		end
 	end
 
-	abilityConfirmedRemote:FireClient(player, abilityName)
-	sendCooldown(player, abilityName, params.cooldown)
+	-- Ability confirmation and cooldown are sent before heavy work to keep UI responsive.
 end
 
 abilityRemote.OnServerEvent:Connect(function(player, abilityName, clientTimestamp)
 	if type(abilityName) ~= "string" then
+		if RunService:IsStudio() then
+			print("[AbilityReject] Invalid ability name type")
+		end
 		return
 	end
 	local isDebug = abilityName == "DebugDamageNearest"
 	local base = isDebug and nil or AbilitiesConfig.GetBase(abilityName)
 	if not isDebug and not base then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s unknown ability"):format(abilityName))
+		end
 		return
 	end
 
 	local antiExploit = ServiceLocator.Get("AntiExploit")
 	if antiExploit and not antiExploit.CheckRateLimit(player, "AbilityRequest", 8, 2) then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s request rate limited"):format(abilityName))
+		end
 		return
 	end
 
 	local root = getPlayerRoot(player)
 	if not root then
+		if RunService:IsStudio() then
+			print(("[AbilityReject] %s no root at request"):format(abilityName))
+		end
 		return
 	end
 
@@ -265,13 +297,22 @@ abilityRemote.OnServerEvent:Connect(function(player, abilityName, clientTimestam
 
 	if antiExploit then
 		local lastPosition = lastPositions[player.UserId]
-		if lastPosition then
-			local maxRange = base.maxRange or 80
-			if (root.Position - lastPosition).Magnitude > maxRange then
+		local lastTime = lastRequestTimes[player.UserId]
+		if lastPosition and lastTime then
+			local maxRange = (base and base.maxRange) or 80
+			local humanoid = root.Parent and root.Parent:FindFirstChildOfClass("Humanoid")
+			local walkSpeed = humanoid and humanoid.WalkSpeed or 16
+			local deltaTime = math.max(0, os.clock() - lastTime)
+			local maxDistance = maxRange + (walkSpeed * deltaTime * 1.5)
+			if (root.Position - lastPosition).Magnitude > maxDistance then
+				if RunService:IsStudio() then
+					print(("[AbilityReject] %s movement delta too large"):format(abilityName))
+				end
 				return
 			end
 		end
 		lastPositions[player.UserId] = root.Position
+		lastRequestTimes[player.UserId] = os.clock()
 	end
 
 	handleAbility(player, abilityName)
